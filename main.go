@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"reflect"
 	"syscall"
+	"time"
 )
 
 const IP_TRANSPARENT = 19
@@ -39,8 +40,19 @@ func main() {
 		} else {
 			go func(conIn net.Conn) {
 				defer conIn.Close()
-				if conOut, err := net.Dial("tcp", *out); err != nil {
-					log.Printf("outgoing error %v", err)
+
+				conOut := func() net.Conn {
+					for i := 0; i < 5; i++ {
+						con, err := net.DialTimeout("tcp", *out, 2*time.Second)
+						if err != nil {
+							return con
+						}
+					}
+					return nil
+				}()
+
+				if conOut == nil {
+					log.Printf("outgoing error")
 				} else {
 					defer conOut.Close()
 
