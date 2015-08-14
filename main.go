@@ -44,7 +44,7 @@ func main() {
 				conOut := func() net.Conn {
 					for i := 0; i < 5; i++ {
 						con, err := net.DialTimeout("tcp", *out, 2*time.Second)
-						if err != nil {
+						if err == nil {
 							return con
 						}
 					}
