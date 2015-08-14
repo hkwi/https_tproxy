@@ -37,44 +37,77 @@ func main() {
 			}
 			panic(err)
 		} else {
-			go func(con net.Conn) {
-				defer con.Close()
+			go func(conIn net.Conn) {
+				defer conIn.Close()
 				if conOut, err := net.Dial("tcp", *out); err != nil {
 					log.Printf("outgoing error %v", err)
 				} else {
 					defer conOut.Close()
 
-					rout := bufio.NewReader(conOut)
-
-					// tried here to use hostname from SSL ClientHello entry,
-					// but wild clients did not support it.
-					// like github.com/elazarl/goproxy
-					// using github.com/inconshreveable/go-vhost
-					req := &http.Request{
-						Method: "CONNECT",
-						Host:   con.LocalAddr().String(),
-						URL:    &url.URL{},
-					}
-					if err := req.WriteProxy(conOut); err != nil {
-						log.Printf("write proxy req failed %v", err)
-						return
-					}
-					if res, err := http.ReadResponse(rout, req); err != nil {
-						log.Printf("send proxy req failed %v", err)
-					} else if res.StatusCode != 200 {
-						log.Printf("connect failed %v", res.Status)
-					} else {
-						sent := make(chan bool)
-						go func() {
-							if _, err := io.Copy(conOut, con); err != nil {
-								log.Printf("transport out error %v", err)
+					laddr := conIn.LocalAddr().(*net.TCPAddr)
+					switch laddr.Port {
+					case 80:
+						req, err := http.ReadRequest(bufio.NewReader(conIn))
+						if err != nil {
+							if err != io.EOF {
+								log.Print("ReadRequest", err)
 							}
-							close(sent)
-						}()
-						if _, err := io.Copy(con, rout); err != nil {
-							log.Printf("transport in error %v", err)
+							return
 						}
-						_ = <-sent
+
+						// using Opaque and RawQuery is stable
+						if len(req.URL.Scheme) == 0 {
+							req.URL.Scheme = "http"
+							if len(req.URL.Host) == 0 {
+								req.URL.Host = req.Header.Get("Host")
+							}
+							if len(req.URL.Host) == 0 {
+								req.URL.Host = laddr.IP.String()
+							}
+						}
+						if err := req.WriteProxy(conOut); err != nil {
+							log.Printf("write proxy req failed %v", err)
+							return
+						}
+						if res, err := http.ReadResponse(bufio.NewReader(conOut), req); err != nil {
+							log.Printf("send proxy req failed %v", err)
+							return
+						} else {
+							sent := make(chan bool)
+							go func() {
+								io.Copy(conOut, req.Body)
+								close(sent)
+							}()
+							res.Write(conIn)
+							_ = <-sent
+						}
+					case 443:
+						// tried here to use hostname from SSL ClientHello entry,
+						// but wild clients did not support it.
+						// like github.com/elazarl/goproxy
+						// using github.com/inconshreveable/go-vhost
+						req := &http.Request{
+							Method: "CONNECT",
+							Host:   conIn.LocalAddr().String(),
+							URL:    &url.URL{},
+						}
+						if err := req.WriteProxy(conOut); err != nil {
+							log.Printf("write proxy req failed %v", err)
+							return
+						}
+						if res, err := http.ReadResponse(bufio.NewReader(conOut), req); err != nil {
+							log.Printf("send proxy req failed %v", err)
+						} else if res.StatusCode != 200 {
+							log.Printf("connect failed %v", res.Status)
+						} else {
+							sent := make(chan bool)
+							go func() {
+								io.Copy(conOut, con)
+								close(sent)
+							}()
+							io.Copy(conIn, res.Body)
+							_ = <-sent
+						}
 					}
 				}
 			}(con)
