@@ -3,7 +3,10 @@ https_tproxy
 transparent proxy gateway program that transmits http, https 
 traffics into specific uplink http proxy.
 
-license is BSD 3 clause license.
+Quick how-to is [available](http://qiita.com/kwi/items/b7c770d6b92c16c334fb)
+in Japanese.
+
+License is BSD 3 clause license.
 
 License
 -------
