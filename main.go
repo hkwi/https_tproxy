@@ -103,7 +103,6 @@ func handle(con net.Conn, out string) {
 	} else {
 		addrs = append(v6addrs, v4addrs...)
 	}
-	log.Print(addrs)
 
 	switch laddr.Port {
 	case 80:
