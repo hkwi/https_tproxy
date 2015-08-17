@@ -98,7 +98,7 @@ func handle(con net.Conn, out string) {
 				}
 			}
 		} else {
-			log.Print(err)
+			log.Print(laddr, err)
 		}
 	}
 
@@ -117,7 +117,7 @@ func handle(con net.Conn, out string) {
 			req, err := http.ReadRequest(rcon)
 			if err != nil {
 				if err != io.EOF {
-					log.Print("ReadRequest", err)
+					log.Print(laddr, fmt.Errorf("http.ReadRequest %v", err))
 				}
 				return nil
 			}
@@ -178,7 +178,7 @@ func handle(con net.Conn, out string) {
 				}
 				return nil
 			}(); err != nil {
-				log.Print(err)
+				log.Print(laddr, err)
 			} else {
 				return
 			}
@@ -217,7 +217,9 @@ func handle(con net.Conn, out string) {
 					_ = <-sent
 					return nil
 				}
-			}(); err == nil {
+			}(); err != nil {
+				log.Print(laddr, err)
+			} else {
 				return
 			}
 		}
