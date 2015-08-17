@@ -46,22 +46,30 @@ func main() {
 	}
 }
 
+func getHostPort(spec string) string {
+	if strings.Index(spec, "://") < 0 {
+		return spec
+	}
+	if u, err := url.Parse(spec); err == nil {
+		return u.Host
+	}
+	return ""
+}
+
 func handle(con net.Conn, out string) {
 	defer con.Close()
 
 	laddr := con.LocalAddr().(*net.TCPAddr)
 
-	outs := strings.Fields(out)
+	var outs []string
+	for _, o := range strings.Fields(out) {
+		outs = append(outs, getHostPort(o))
+	}
 	if len(outs) == 0 && laddr.Port == 443 {
 		for _, name := range []string{"HTTPS_PROXY", "https_proxy"} {
 			if value := os.Getenv(name); len(value) > 0 {
-				if strings.Index(value, "://") < 0 {
-					outs = append(outs, value)
-					break
-				}
-				if u, err := url.Parse(value); err == nil {
-					outs = append(outs, u.Host)
-					break
+				if o := getHostPort(value); len(o) > 0 {
+					outs = append(outs, o)
 				}
 			}
 		}
@@ -69,13 +77,8 @@ func handle(con net.Conn, out string) {
 	if len(outs) == 0 {
 		for _, name := range []string{"HTTP_PROXY", "http_proxy"} {
 			if value := os.Getenv(name); len(value) > 0 {
-				if strings.Index(value, "://") < 0 {
-					outs = append(outs, value)
-					break
-				}
-				if u, err := url.Parse(value); err == nil {
-					outs = append(outs, u.Host)
-					break
+				if o := getHostPort(value); len(o) > 0 {
+					outs = append(outs, o)
 				}
 			}
 		}
@@ -94,6 +97,8 @@ func handle(con net.Conn, out string) {
 					v6addrs = append(v6addrs, net.JoinHostPort(ip.String(), port))
 				}
 			}
+		} else {
+			log.Print(err)
 		}
 	}
 
