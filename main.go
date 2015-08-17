@@ -106,48 +106,75 @@ func handle(con net.Conn, out string) {
 
 	switch laddr.Port {
 	case 80:
-		req, err := http.ReadRequest(bufio.NewReader(con))
-		if err != nil {
-			if err != io.EOF {
-				log.Print("ReadRequest", err)
+		rcon := bufio.NewReader(con)
+
+		getRequest := func() *http.Request {
+			req, err := http.ReadRequest(rcon)
+			if err != nil {
+				if err != io.EOF {
+					log.Print("ReadRequest", err)
+				}
+				return nil
 			}
-			return
+
+			// using Opaque and RawQuery is stable
+			if len(req.URL.Scheme) == 0 {
+				req.URL.Scheme = "http"
+				if len(req.URL.Host) == 0 {
+					req.URL.Host = req.Host
+				}
+				if len(req.URL.Host) == 0 {
+					req.URL.Host = laddr.IP.String()
+				}
+			}
+			return req
 		}
 
-		// using Opaque and RawQuery is stable
-		if len(req.URL.Scheme) == 0 {
-			req.URL.Scheme = "http"
-			if len(req.URL.Host) == 0 {
-				req.URL.Host = req.Header.Get("Host")
-			}
-			if len(req.URL.Host) == 0 {
-				req.URL.Host = laddr.IP.String()
-			}
-		}
-
+		var req *http.Request
 		for _, addr := range addrs {
 			if err := func() error {
-				conOut, err := net.DialTimeout("tcp", addr, 2*time.Second)
-				if err != nil {
-					return err
-				}
-				defer conOut.Close()
+				var conOut net.Conn
+				var rconOut *bufio.Reader
+				for {
+					if req == nil {
+						req = getRequest()
+					}
+					if req == nil {
+						return nil
+					}
+					if conOut == nil {
+						var e1 error
+						conOut, e1 = net.DialTimeout("tcp", addr, 2*time.Second)
+						if e1 != nil {
+							return e1
+						}
+						rconOut = bufio.NewReader(conOut)
+						defer conOut.Close()
+					}
 
-				if err := req.WriteProxy(conOut); err != nil {
-					return err
-				} else if res, err := http.ReadResponse(bufio.NewReader(conOut), req); err != nil {
-					return err
-				} else {
-					sent := make(chan bool)
-					go func() {
-						io.Copy(conOut, req.Body)
-						close(sent)
-					}()
-					res.Write(con)
-					_ = <-sent
-					return nil
+					if err := req.WriteProxy(conOut); err != nil {
+						return err
+					} else if res, err := http.ReadResponse(rconOut, req); err != nil {
+						return err
+					} else {
+						sent := make(chan bool)
+						go func() {
+							io.Copy(conOut, req.Body)
+							close(sent)
+						}()
+						res.Write(con)
+						_ = <-sent
+
+						if "keep-alive" != req.Header.Get("Connection") || "keep-alive" != res.Header.Get("Connection") {
+							return nil
+						}
+						req = nil
+					}
 				}
-			}(); err == nil {
+				return nil
+			}(); err != nil {
+				log.Print(err)
+			} else {
 				return
 			}
 		}
@@ -190,5 +217,5 @@ func handle(con net.Conn, out string) {
 			}
 		}
 	}
-	log.Printf("handle faild for %v", laddr)
+	log.Printf("handle faild for %v %v", laddr, addrs)
 }
