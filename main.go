@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -40,123 +41,155 @@ func main() {
 			}
 			panic(err)
 		} else {
-			go func(conIn net.Conn) {
-				defer conIn.Close()
+			go handle(con, *out)
+		}
+	}
+}
 
-				laddr := conIn.LocalAddr().(*net.TCPAddr)
+func handle(con net.Conn, out string) {
+	defer con.Close()
 
-				outs := strings.Fields(*out)
-				if len(outs) == 0 && laddr.Port == 443 {
-					for _, name := range []string{"HTTPS_PROXY", "https_proxy"} {
-						if value := os.Getenv(name); len(value) > 0 {
-							if strings.Index(value, "://") < 0 {
-								outs = append(outs, value)
-								break
-							}
-							if u, err := url.Parse(value); err == nil {
-								outs = append(outs, u.Host)
-								break
-							}
-						}
-					}
+	laddr := con.LocalAddr().(*net.TCPAddr)
+
+	outs := strings.Fields(out)
+	if len(outs) == 0 && laddr.Port == 443 {
+		for _, name := range []string{"HTTPS_PROXY", "https_proxy"} {
+			if value := os.Getenv(name); len(value) > 0 {
+				if strings.Index(value, "://") < 0 {
+					outs = append(outs, value)
+					break
 				}
-				if len(outs) == 0 {
-					for _, name := range []string{"HTTP_PROXY", "http_proxy"} {
-						if value := os.Getenv(name); len(value) > 0 {
-							if strings.Index(value, "://") < 0 {
-								outs = append(outs, value)
-								break
-							}
-							if u, err := url.Parse(value); err == nil {
-								outs = append(outs, u.Host)
-								break
-							}
-						}
-					}
+				if u, err := url.Parse(value); err == nil {
+					outs = append(outs, u.Host)
+					break
 				}
+			}
+		}
+	}
+	if len(outs) == 0 {
+		for _, name := range []string{"HTTP_PROXY", "http_proxy"} {
+			if value := os.Getenv(name); len(value) > 0 {
+				if strings.Index(value, "://") < 0 {
+					outs = append(outs, value)
+					break
+				}
+				if u, err := url.Parse(value); err == nil {
+					outs = append(outs, u.Host)
+					break
+				}
+			}
+		}
+	}
 
-				conOut := func() net.Conn {
-					for i := 0; i < 5; i++ {
-						for _, out := range outs {
-							con, err := net.DialTimeout("tcp", out, 2*time.Second)
-							if err == nil {
-								return con
-							}
-						}
-					}
-					return nil
-				}()
-				if conOut == nil {
-					log.Printf("outgoing error")
-					return
+	var v4addrs []string
+	var v6addrs []string
+	for _, out := range outs {
+		if host, port, err := net.SplitHostPort(out); err != nil {
+			log.Print("proxy config %v error %v", out, err)
+		} else if ips, err := net.LookupIP(host); err == nil {
+			for _, ip := range ips {
+				if ip.To4() != nil {
+					v4addrs = append(v4addrs, net.JoinHostPort(ip.String(), port))
+				} else {
+					v6addrs = append(v6addrs, net.JoinHostPort(ip.String(), port))
+				}
+			}
+		}
+	}
+
+	var addrs []string
+	if laddr.IP.To4() != nil {
+		addrs = append(v4addrs, v6addrs...)
+	} else {
+		addrs = append(v6addrs, v4addrs...)
+	}
+	log.Print(addrs)
+
+	switch laddr.Port {
+	case 80:
+		req, err := http.ReadRequest(bufio.NewReader(con))
+		if err != nil {
+			if err != io.EOF {
+				log.Print("ReadRequest", err)
+			}
+			return
+		}
+
+		// using Opaque and RawQuery is stable
+		if len(req.URL.Scheme) == 0 {
+			req.URL.Scheme = "http"
+			if len(req.URL.Host) == 0 {
+				req.URL.Host = req.Header.Get("Host")
+			}
+			if len(req.URL.Host) == 0 {
+				req.URL.Host = laddr.IP.String()
+			}
+		}
+
+		for _, addr := range addrs {
+			if err := func() error {
+				conOut, err := net.DialTimeout("tcp", addr, 2*time.Second)
+				if err != nil {
+					return err
 				}
 				defer conOut.Close()
 
-				switch laddr.Port {
-				case 80:
-					req, err := http.ReadRequest(bufio.NewReader(conIn))
-					if err != nil {
-						if err != io.EOF {
-							log.Print("ReadRequest", err)
-						}
-						return
-					}
-
-					// using Opaque and RawQuery is stable
-					if len(req.URL.Scheme) == 0 {
-						req.URL.Scheme = "http"
-						if len(req.URL.Host) == 0 {
-							req.URL.Host = req.Header.Get("Host")
-						}
-						if len(req.URL.Host) == 0 {
-							req.URL.Host = laddr.IP.String()
-						}
-					}
-					if err := req.WriteProxy(conOut); err != nil {
-						log.Printf("write proxy req failed %v", err)
-						return
-					}
-					if res, err := http.ReadResponse(bufio.NewReader(conOut), req); err != nil {
-						log.Printf("send proxy req failed %v", err)
-						return
-					} else {
-						sent := make(chan bool)
-						go func() {
-							io.Copy(conOut, req.Body)
-							close(sent)
-						}()
-						res.Write(conIn)
-						_ = <-sent
-					}
-				case 443:
-					// tried here to use hostname from SSL ClientHello entry,
-					// but wild clients did not support it.
-					// like github.com/elazarl/goproxy
-					// using github.com/inconshreveable/go-vhost
-					req := &http.Request{
-						Method: "CONNECT",
-						Host:   conIn.LocalAddr().String(),
-						URL:    &url.URL{},
-					}
-					if err := req.WriteProxy(conOut); err != nil {
-						log.Printf("write proxy req failed %v", err)
-						return
-					}
-					if res, err := http.ReadResponse(bufio.NewReader(conOut), req); err != nil {
-						log.Printf("send proxy req failed %v", err)
-					} else if res.StatusCode != 200 {
-						log.Printf("connect failed %v", res.Status)
-					} else {
-						sent := make(chan bool)
-						go func() {
-							io.Copy(conOut, con)
-							close(sent)
-						}()
-						io.Copy(conIn, res.Body)
-						_ = <-sent
-					}
+				if err := req.WriteProxy(conOut); err != nil {
+					return err
+				} else if res, err := http.ReadResponse(bufio.NewReader(conOut), req); err != nil {
+					return err
+				} else {
+					sent := make(chan bool)
+					go func() {
+						io.Copy(conOut, req.Body)
+						close(sent)
+					}()
+					res.Write(con)
+					_ = <-sent
+					return nil
 				}
-			}(con)
+			}(); err == nil {
+				return
+			}
+		}
+	case 443:
+		// tried here to use hostname from SSL ClientHello entry,
+		// but wild clients did not support it.
+		// like github.com/elazarl/goproxy
+		// using github.com/inconshreveable/go-vhost
+		req := &http.Request{
+			Method: "CONNECT",
+			Host:   con.LocalAddr().String(),
+			URL:    &url.URL{},
+		}
+		for _, addr := range addrs {
+			if err := func() error {
+				conOut, err := net.DialTimeout("tcp", addr, 2*time.Second)
+				if err != nil {
+					return err
+				}
+				defer conOut.Close()
+
+				if err := req.WriteProxy(conOut); err != nil {
+					return err
+				} else if res, err := http.ReadResponse(bufio.NewReader(conOut), req); err != nil {
+					return err
+				} else if res.StatusCode != 200 {
+					return fmt.Errorf("proxy error %v", res)
+				} else {
+					sent := make(chan bool)
+					go func() {
+						io.Copy(conOut, con)
+						close(sent)
+					}()
+					io.Copy(con, res.Body)
+					_ = <-sent
+					return nil
+				}
+			}(); err == nil {
+				return
+			}
 		}
 	}
+	log.Printf("handle faild for %v", laddr)
 }
