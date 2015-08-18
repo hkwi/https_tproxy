@@ -130,7 +130,11 @@ func handle(con net.Conn, out string) {
 		getRequest := func() *http.Request {
 			req, err := http.ReadRequest(rcon)
 			if err != nil {
-				if err != io.EOF {
+				if err == io.EOF {
+					// pass
+				} else if e, ok := err.(net.Error); ok && e.Timeout() {
+					// pass
+				} else {
 					log.Print(laddr, fmt.Errorf("http.ReadRequest %v", err))
 				}
 				return nil
