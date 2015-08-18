@@ -56,6 +56,20 @@ func getHostPort(spec string) string {
 	return ""
 }
 
+type TimedIo struct {
+	Conn net.Conn
+}
+
+func (self TimedIo) Read(buf []byte) (int, error) {
+	self.Conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	return self.Conn.Read(buf)
+}
+
+func (self TimedIo) Write(buf []byte) (int, error) {
+	self.Conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	return self.Conn.Write(buf)
+}
+
 func handle(con net.Conn, out string) {
 	defer con.Close()
 
@@ -111,7 +125,7 @@ func handle(con net.Conn, out string) {
 
 	switch laddr.Port {
 	case 80:
-		rcon := bufio.NewReader(con)
+		rcon := bufio.NewReader(TimedIo{con})
 
 		getRequest := func() *http.Request {
 			req, err := http.ReadRequest(rcon)
@@ -153,7 +167,7 @@ func handle(con net.Conn, out string) {
 						if e1 != nil {
 							return e1
 						}
-						rconOut = bufio.NewReader(conOut)
+						rconOut = bufio.NewReader(TimedIo{conOut})
 						defer conOut.Close()
 					}
 
@@ -164,7 +178,7 @@ func handle(con net.Conn, out string) {
 					} else {
 						sent := make(chan bool)
 						go func() {
-							io.Copy(conOut, req.Body)
+							io.Copy(TimedIo{conOut}, req.Body)
 							close(sent)
 						}()
 						res.Write(con)
@@ -203,17 +217,17 @@ func handle(con net.Conn, out string) {
 
 				if err := req.WriteProxy(conOut); err != nil {
 					return err
-				} else if res, err := http.ReadResponse(bufio.NewReader(conOut), req); err != nil {
+				} else if res, err := http.ReadResponse(bufio.NewReader(TimedIo{conOut}), req); err != nil {
 					return err
 				} else if res.StatusCode != 200 {
 					return fmt.Errorf("proxy error %v", res)
 				} else {
 					sent := make(chan bool)
 					go func() {
-						io.Copy(conOut, con)
+						io.Copy(TimedIo{conOut}, TimedIo{con})
 						close(sent)
 					}()
-					io.Copy(con, res.Body)
+					io.Copy(TimedIo{con}, res.Body)
 					_ = <-sent
 					return nil
 				}
