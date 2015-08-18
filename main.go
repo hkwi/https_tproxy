@@ -61,12 +61,12 @@ type TimedIo struct {
 }
 
 func (self TimedIo) Read(buf []byte) (int, error) {
-	self.Conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	self.Conn.SetReadDeadline(time.Now().Add(time.Minute))
 	return self.Conn.Read(buf)
 }
 
 func (self TimedIo) Write(buf []byte) (int, error) {
-	self.Conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	self.Conn.SetWriteDeadline(time.Now().Add(time.Minute))
 	return self.Conn.Write(buf)
 }
 
