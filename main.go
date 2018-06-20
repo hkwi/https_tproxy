@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"reflect"
 	"strings"
 	"syscall"
 	"time"
@@ -18,30 +17,38 @@ import (
 
 const IP_TRANSPARENT = 19
 
+func setIpTransparent(fd uintptr) {
+	if err := syscall.SetsockoptInt(int(fd), syscall.SOL_IP, IP_TRANSPARENT, 1); err != nil {
+		panic(err)
+	}
+}
+
 func main() {
 	// http://wiki.squid-cache.org/Features/IPv6
 	// http://wiki.squid-cache.org/Features/Tproxy4
 	out := flag.String("out", "", "uplink http proxy address")
 	in := flag.String("in", ":3128", "proxy https listen address")
 	flag.Parse()
-
-	ln, err := net.Listen("tcp", *in)
-	if err != nil {
+	
+	// TODO: use net.ListenConfig in Go 1.11
+	if inAddr, err := net.ResolveTCPAddr("tcp", *in); err != nil{
 		panic(err)
-	}
-	fdv := reflect.Indirect(reflect.Indirect(reflect.ValueOf(ln)).FieldByName("fd")).FieldByName("sysfd").Int()
-	if err := syscall.SetsockoptInt(int(fdv), syscall.SOL_IP, IP_TRANSPARENT, 1); err != nil {
+	} else if ln, err := net.ListenTCP("tcp", inAddr); err != nil {
 		panic(err)
-	}
-
-	for {
-		if con, err := ln.Accept(); err != nil {
-			if eno, ok := err.(syscall.Errno); ok && eno.Temporary() {
-				continue
+	} else if raw, err := ln.SyscallConn(); err != nil {
+		panic(err)
+	} else if err := raw.Control(setIpTransparent); err != nil {
+		panic(err)
+	} else {
+		for {
+			if con, err := ln.Accept(); err != nil {
+				if eno, ok := err.(syscall.Errno); ok && eno.Temporary() {
+					continue
+				}
+				panic(err)
+			} else {
+				go handle(con, *out)
 			}
-			panic(err)
-		} else {
-			go handle(con, *out)
 		}
 	}
 }
