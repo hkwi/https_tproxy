@@ -131,7 +131,7 @@ func handle(con net.Conn, out string) {
 	}
 
 	switch laddr.Port {
-	case 80:
+	case 80, 11371:
 		rcon := bufio.NewReader(TimedIo{con})
 
 		getRequest := func() *http.Request {
