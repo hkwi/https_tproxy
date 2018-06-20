@@ -1,6 +1,6 @@
 https_tproxy
 ------------
-transparent proxy gateway program that transmits http, https traffics into specified uplink http proxy. `CONNECT` method will be transparently prepared for https connections.
+transparent proxy gateway program that transmits http, https traffics into specified uplink http proxy. `CONNECT` method will be transparently prepared for https connections (NO man-in-the-middle decrypt).
 
 ```
 GOMAXPROCS=4 https_proxy -in [::]:3128 -out gw.local:8080
